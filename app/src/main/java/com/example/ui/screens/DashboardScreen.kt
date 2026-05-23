@@ -744,7 +744,7 @@ fun CustomScrollsBarChart(chartData: List<ChartItem>) {
 
         // Sub Bar Icons/Labels Row
         Spacer(modifier = Modifier.height(8.dp))
-        Divider(color = Color.White.copy(alpha = 0.05f))
+        HorizontalDivider(color = Color.White.copy(alpha = 0.05f))
         Spacer(modifier = Modifier.height(6.dp))
 
         Row(

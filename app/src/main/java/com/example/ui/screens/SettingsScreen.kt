@@ -160,7 +160,7 @@ fun SettingsScreen(
                             }
                         }
                     )
-                    Divider(color = Color.White.copy(alpha = 0.05f), modifier = Modifier.padding(vertical = 10.dp))
+                    HorizontalDivider(color = Color.White.copy(alpha = 0.05f), modifier = Modifier.padding(vertical = 10.dp))
 
                     // 2. Windows Float Overlays indicator
                     PermissionDashboardItem(
@@ -184,7 +184,7 @@ fun SettingsScreen(
                             }
                         }
                     )
-                    Divider(color = Color.White.copy(alpha = 0.05f), modifier = Modifier.padding(vertical = 10.dp))
+                    HorizontalDivider(color = Color.White.copy(alpha = 0.05f), modifier = Modifier.padding(vertical = 10.dp))
 
                     // 3. Usage Stats index
                     PermissionDashboardItem(
@@ -203,7 +203,7 @@ fun SettingsScreen(
                             }
                         }
                     )
-                    Divider(color = Color.White.copy(alpha = 0.05f), modifier = Modifier.padding(vertical = 10.dp))
+                    HorizontalDivider(color = Color.White.copy(alpha = 0.05f), modifier = Modifier.padding(vertical = 10.dp))
 
                     // 4. Doze/Battery index
                     PermissionDashboardItem(

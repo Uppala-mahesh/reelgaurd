@@ -446,7 +446,7 @@ class ReelService : Service(), LifecycleOwner {
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.SemiBold
                             )
-                            Divider(color = Color.White.copy(alpha = 0.1f))
+                            HorizontalDivider(color = Color.White.copy(alpha = 0.1f))
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,

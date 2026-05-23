@@ -14,6 +14,8 @@ import java.io.FileWriter
 import java.text.SimpleDateFormat
 import java.util.*
 
+import kotlin.OptIn
+
 class ReelRepository(private val context: Context, private val database: ReelDatabase) {
     private val sharedPrefs: SharedPreferences = context.getSharedPreferences("reelguard_prefs", Context.MODE_PRIVATE)
     private val dao = database.reelDao()
@@ -110,6 +112,7 @@ class ReelRepository(private val context: Context, private val database: ReelDat
     }
 
     // Reactive streams from database
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     val todayCounts: Flow<List<DailyCountEntity>> = flow {
         while (true) {
             emit(getTodayDateString())

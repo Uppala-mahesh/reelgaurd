@@ -38,7 +38,7 @@ class ReelGuardApplication : Application() {
             applicationContext,
             ReelDatabase::class.java,
             "reelguard_database"
-        ).fallbackToDestructiveMigration()
+        ).fallbackToDestructiveMigration(dropAllTables = true)
          .build()
 
         // Instantiate repository
