@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">ReelGuard</string>
+    <string name="accessibility_service_description">Helps users track and limit short-form video consumption for digital wellbeing.</string>
+</resources>

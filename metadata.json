@@ -1,0 +1,6 @@
+{
+  "name": "ReelGuard",
+  "description": "Digital Wellbeing & Reel Limiter app to track short-form video consumption, enforce daily limits, and view scrolling analytics.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
