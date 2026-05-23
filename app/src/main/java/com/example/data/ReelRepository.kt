@@ -30,7 +30,7 @@ class ReelRepository(private val context: Context, private val database: ReelDat
     val cooldownEndTime = MutableStateFlow(sharedPrefs.getLong("cooldown_end", 0L))
 
     // Real-time tracking configuration & state
-    val isServiceEnabled = MutableStateFlow(sharedPrefs.getBoolean("service_enabled", false))
+    val isServiceEnabled = MutableStateFlow(sharedPrefs.getBoolean("service_enabled", true))
     val biometricOverrideEnabled = MutableStateFlow(sharedPrefs.getBoolean("biometric_override", true))
     val cooldownDurationMinutes = MutableStateFlow(sharedPrefs.getInt("cooldown_duration", 10))
     val globalLimit = MutableStateFlow(sharedPrefs.getInt("global_limit", 50))
@@ -47,6 +47,9 @@ class ReelRepository(private val context: Context, private val database: ReelDat
     data class AppInfo(val packageName: String, val appName: String)
 
     init {
+        if (!sharedPrefs.contains("service_enabled")) {
+            sharedPrefs.edit().putBoolean("service_enabled", true).apply()
+        }
         // Enforce default limits if not set
         targetApps.forEach { app ->
             if (!sharedPrefs.contains("limit_${app.packageName}")) {
@@ -305,5 +308,16 @@ class ReelRepository(private val context: Context, private val database: ReelDat
         writer.flush()
         writer.close()
         file
+    }
+
+    suspend fun clearAllData() {
+        withContext(Dispatchers.IO) {
+            dao.clearDailyCounts()
+            dao.clearSessionLogs()
+            dao.clearOverrideLogs()
+            sharedPrefs.edit().remove("cooldown_end").apply()
+            cooldownEndTime.value = 0L
+            sessionCount.value = 0
+        }
     }
 }

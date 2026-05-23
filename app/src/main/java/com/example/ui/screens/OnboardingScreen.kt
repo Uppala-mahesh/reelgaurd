@@ -227,11 +227,15 @@ fun OnboardingScreen(
                     } else {
                         var isAccessibilityGranted by remember { mutableStateOf(false) }
                         var isOverlayGranted by remember { mutableStateOf(false) }
+                        var isUsageStatsGranted by remember { mutableStateOf(false) }
+                        var isBatteryExempted by remember { mutableStateOf(false) }
 
                         LaunchedEffect(Unit) {
                             while (true) {
                                 isAccessibilityGranted = isAccessibilitySettingsOn(context, ReelTrackerAccessibilityService::class.java)
                                 isOverlayGranted = Settings.canDrawOverlays(context)
+                                isUsageStatsGranted = isUsageStatsGrantedInternal(context)
+                                isBatteryExempted = isBatteryExemptedInternal(context)
                                 kotlinx.coroutines.delay(1000)
                             }
                         }
@@ -306,6 +310,45 @@ fun OnboardingScreen(
                                     } catch (e: Exception) {
                                         try {
                                             val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION)
+                                            context.startActivity(intent)
+                                        } catch (ex: Exception) {}
+                                    }
+                                }
+                            )
+
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            // Usage Stats Row
+                            PermissionSetupRow(
+                                title = "Usage Stats Access",
+                                isGranted = isUsageStatsGranted,
+                                onClick = {
+                                    try {
+                                        context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
+                                    } catch (e: Exception) {
+                                        try {
+                                            context.startActivity(Intent(Settings.ACTION_SETTINGS))
+                                        } catch (ex: Exception) {}
+                                    }
+                                }
+                            )
+
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            // Battery Exemption Row
+                            PermissionSetupRow(
+                                title = "Battery Optimization Bypass",
+                                isGranted = isBatteryExempted,
+                                onClick = {
+                                    try {
+                                        val intent = Intent(
+                                            Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                            Uri.parse("package:${context.packageName}")
+                                        )
+                                        context.startActivity(intent)
+                                    } catch (e: Exception) {
+                                        try {
+                                            val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
                                             context.startActivity(intent)
                                         } catch (ex: Exception) {}
                                     }
@@ -420,18 +463,53 @@ fun PermissionSetupRow(
     }
 }
 
+private fun isBatteryExemptedInternal(context: Context): Boolean {
+    return try {
+        val pm = context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+        pm.isIgnoringBatteryOptimizations(context.packageName)
+    } catch (e: Exception) {
+        false
+    }
+}
+
+private fun isUsageStatsGrantedInternal(context: Context): Boolean {
+    return try {
+        val appOps = context.getSystemService(Context.APP_OPS_SERVICE) as android.app.AppOpsManager
+        val mode = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            appOps.unsafeCheckOpNoThrow(android.app.AppOpsManager.OPSTR_GET_USAGE_STATS, android.os.Process.myUid(), context.packageName)
+        } else {
+            @Suppress("DEPRECATION")
+            appOps.checkOpNoThrow(android.app.AppOpsManager.OPSTR_GET_USAGE_STATS, android.os.Process.myUid(), context.packageName)
+        }
+        mode == android.app.AppOpsManager.MODE_ALLOWED
+    } catch (e: Exception) {
+        false
+    }
+}
+
 private fun isAccessibilitySettingsOn(context: Context, service: Class<out AccessibilityService>): Boolean {
+    try {
+        val am = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as? android.view.accessibility.AccessibilityManager
+        if (am != null) {
+            val enabledServices = am.getEnabledAccessibilityServiceList(android.accessibilityservice.AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
+            for (enabledService in enabledServices) {
+                val componentInfo = enabledService.resolveInfo?.serviceInfo
+                if (componentInfo != null && componentInfo.packageName == context.packageName && componentInfo.name == service.name) {
+                    return true
+                }
+            }
+        }
+    } catch (e: Exception) {}
     return try {
         var accessibilityEnabled = 0
-        val serviceName = context.packageName + "/" + (service.canonicalName ?: service.name)
+        val serviceName = context.packageName + "/" + service.name
+        val serviceNameAlt = context.packageName + "/" + (service.canonicalName ?: service.name)
         try {
             accessibilityEnabled = Settings.Secure.getInt(
                 context.applicationContext.contentResolver,
                 Settings.Secure.ACCESSIBILITY_ENABLED
             )
-        } catch (e: Exception) {
-            // Fallback
-        }
+        } catch (e: Exception) {}
         val mStringColonSplitter = android.text.TextUtils.SimpleStringSplitter(':')
         if (accessibilityEnabled == 1) {
             val settingValue = Settings.Secure.getString(
@@ -442,7 +520,8 @@ private fun isAccessibilitySettingsOn(context: Context, service: Class<out Acces
                 mStringColonSplitter.setString(settingValue)
                 while (mStringColonSplitter.hasNext()) {
                     val accessibilityService = mStringColonSplitter.next()
-                    if (accessibilityService.equals(serviceName, ignoreCase = true)) {
+                    if (accessibilityService.equals(serviceName, ignoreCase = true) || 
+                        accessibilityService.equals(serviceNameAlt, ignoreCase = true)) {
                         return true
                     }
                 }

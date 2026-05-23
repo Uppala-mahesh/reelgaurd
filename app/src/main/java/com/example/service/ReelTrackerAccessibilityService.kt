@@ -67,17 +67,14 @@ class ReelTrackerAccessibilityService : android.accessibilityservice.Accessibili
                 }
             }
 
-            AccessibilityEvent.TYPE_VIEW_SCROLLED,
-            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
+            AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
                 if (!isTargetApp) return
 
-                // To filter general non-scrolling events inside TYPE_WINDOW_CONTENT_CHANGED:
-                val isScrollingContent = event.eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED ||
-                    event.isScrollable ||
-                    (event.className?.toString()?.contains("ViewPager", ignoreCase = true) == true) ||
-                    (event.className?.toString()?.contains("RecyclerView", ignoreCase = true) == true)
-
-                if (!isScrollingContent) return
+                // Auto-activate tracking session if we detect scroll inside target package
+                if (!repository.isTrackingActive.value) {
+                    repository.startSession(packageName)
+                    ReelService.start(this)
+                }
 
                 if (packageName == "com.google.android.youtube") {
                     android.util.Log.d("ReelGuardTracker", "SCROLL DETECTED: YouTube Short")
@@ -89,8 +86,8 @@ class ReelTrackerAccessibilityService : android.accessibilityservice.Accessibili
 
                 if (repository.isTrackingActive.value) {
                     val currentTime = System.currentTimeMillis()
-                    // 1500ms Debounce mechanism to prevent double trigger on frame redraw jitter
-                    if (currentTime - lastScrollTime >= 1500) {
+                    // 800ms Debounce mechanism to catch fast consecutive scrolls while filtering redraw layout jitter
+                    if (currentTime - lastScrollTime >= 800) {
                         lastScrollTime = currentTime
                         scope.launch {
                             val limitReached = repository.registerScroll(packageName)

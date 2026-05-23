@@ -28,6 +28,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -79,6 +81,12 @@ fun DashboardScreen(
     val enabledApps by remember(todayCounts) {
         derivedStateOf {
             repository.targetApps.filter { repository.isAppEnabled(it.packageName) }
+        }
+    }
+
+    val chunkedEnabledApps by remember(enabledApps) {
+        derivedStateOf {
+            enabledApps.chunked(2)
         }
     }
 
@@ -368,7 +376,7 @@ fun DashboardScreen(
 
         // Stats Dashboard (Enhanced Spacious Grid for Target Platforms)
         items(
-            items = enabledApps.chunked(2),
+            items = chunkedEnabledApps,
             key = { row -> row.joinToString("-") { it.packageName } }
         ) { rowApps ->
             Row(
@@ -729,8 +737,12 @@ fun CustomScrollsBarChart(chartData: List<ChartItem>) {
                     // Vertical Bar Node
                     Box(
                         modifier = Modifier
-                            .fillMaxHeight(fraction = animatedScale.value.coerceIn(0.02f, 1f))
+                            .height(110.dp)
                             .fillMaxWidth(fraction = 0.45f)
+                            .graphicsLayer {
+                                scaleY = animatedScale.value.coerceIn(0.02f, 1f)
+                                transformOrigin = TransformOrigin(0.5f, 1f)
+                            }
                             .clip(RoundedCornerShape(topStart = 6.dp, topEnd = 6.dp))
                             .background(
                                 brush = Brush.verticalGradient(
@@ -808,17 +820,28 @@ private fun shareExcelFile(context: Context, file: File) {
 }
 
 private fun isAccessibilitySettingsOn(context: Context, service: Class<out android.accessibilityservice.AccessibilityService>): Boolean {
+    try {
+        val am = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as? android.view.accessibility.AccessibilityManager
+        if (am != null) {
+            val enabledServices = am.getEnabledAccessibilityServiceList(android.accessibilityservice.AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
+            for (enabledService in enabledServices) {
+                val componentInfo = enabledService.resolveInfo?.serviceInfo
+                if (componentInfo != null && componentInfo.packageName == context.packageName && componentInfo.name == service.name) {
+                    return true
+                }
+            }
+        }
+    } catch (e: Exception) {}
     return try {
         var accessibilityEnabled = 0
-        val serviceName = context.packageName + "/" + (service.canonicalName ?: service.name)
+        val serviceName = context.packageName + "/" + service.name
+        val serviceNameAlt = context.packageName + "/" + (service.canonicalName ?: service.name)
         try {
             accessibilityEnabled = Settings.Secure.getInt(
                 context.applicationContext.contentResolver,
                 Settings.Secure.ACCESSIBILITY_ENABLED
             )
-        } catch (e: Exception) {
-            // Fallback
-        }
+        } catch (e: Exception) {}
         val mStringColonSplitter = android.text.TextUtils.SimpleStringSplitter(':')
         if (accessibilityEnabled == 1) {
             val settingValue = Settings.Secure.getString(
@@ -829,7 +852,8 @@ private fun isAccessibilitySettingsOn(context: Context, service: Class<out andro
                 mStringColonSplitter.setString(settingValue)
                 while (mStringColonSplitter.hasNext()) {
                     val accessibilityService = mStringColonSplitter.next()
-                    if (accessibilityService.equals(serviceName, ignoreCase = true)) {
+                    if (accessibilityService.equals(serviceName, ignoreCase = true) || 
+                        accessibilityService.equals(serviceNameAlt, ignoreCase = true)) {
                         return true
                     }
                 }

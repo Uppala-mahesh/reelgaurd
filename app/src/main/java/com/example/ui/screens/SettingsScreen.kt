@@ -33,6 +33,7 @@ import androidx.compose.ui.unit.sp
 import com.example.service.ReelTrackerAccessibilityService
 import com.example.data.ReelRepository
 import com.example.ui.theme.*
+import kotlinx.coroutines.launch
 
 @Composable
 fun SettingsScreen(
@@ -424,6 +425,75 @@ fun SettingsScreen(
             }
         }
 
+        // Clear all data card
+        item {
+            val scope = rememberCoroutineScope()
+            var showDialog by remember { mutableStateOf(false) }
+
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                color = Color(0xFF1E1616),
+                border = BorderStroke(1.dp, DangerRed.copy(alpha = 0.3f))
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "Reset & Pure Clean",
+                        color = DangerRed,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "Instantly clears all tracked scroll historical counters, session records, and active cooldown states back to 0. This cannot be undone.",
+                        color = TextGray,
+                        fontSize = 11.sp,
+                        modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
+                    )
+                    Button(
+                        onClick = { showDialog = true },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = DangerRed.copy(alpha = 0.1f),
+                            contentColor = DangerRed
+                        ),
+                        border = BorderStroke(1.dp, DangerRed.copy(alpha = 0.4f)),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Reset All Metrics to 0", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    }
+                }
+            }
+
+            if (showDialog) {
+                AlertDialog(
+                    onDismissRequest = { showDialog = false },
+                    title = { Text("Reset database metrics?", color = Color.White) },
+                    text = { Text("This will permanently clear today's counts, historical logs, and custom overrides, resetting your active streak back to 0.", color = TextGray) },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                showDialog = false
+                                scope.launch {
+                                    repository.clearAllData()
+                                    android.widget.Toast.makeText(context, "Database cleared successfully! Data is now strictly 0.", android.widget.Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        ) {
+                            Text("CONFIRM RESET", color = DangerRed, fontWeight = FontWeight.Bold)
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showDialog = false }) {
+                            Text("CANCEL", color = Color.White)
+                        }
+                    },
+                    containerColor = Color(0xFF121212),
+                    textContentColor = TextGray,
+                    titleContentColor = Color.White
+                )
+            }
+        }
+
         // Spacing offset
         item {
             Spacer(modifier = Modifier.height(70.dp))
@@ -478,17 +548,28 @@ fun PermissionDashboardItem(
 }
 
 private fun isAccessibilitySettingsOn(context: Context, service: Class<out AccessibilityService>): Boolean {
+    try {
+        val am = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as? android.view.accessibility.AccessibilityManager
+        if (am != null) {
+            val enabledServices = am.getEnabledAccessibilityServiceList(android.accessibilityservice.AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
+            for (enabledService in enabledServices) {
+                val componentInfo = enabledService.resolveInfo?.serviceInfo
+                if (componentInfo != null && componentInfo.packageName == context.packageName && componentInfo.name == service.name) {
+                    return true
+                }
+            }
+        }
+    } catch (e: Exception) {}
     return try {
         var accessibilityEnabled = 0
-        val serviceName = context.packageName + "/" + (service.canonicalName ?: service.name)
+        val serviceName = context.packageName + "/" + service.name
+        val serviceNameAlt = context.packageName + "/" + (service.canonicalName ?: service.name)
         try {
             accessibilityEnabled = Settings.Secure.getInt(
                 context.applicationContext.contentResolver,
                 Settings.Secure.ACCESSIBILITY_ENABLED
             )
-        } catch (e: Exception) {
-            // Fallback
-        }
+        } catch (e: Exception) {}
         val mStringColonSplitter = android.text.TextUtils.SimpleStringSplitter(':')
         if (accessibilityEnabled == 1) {
             val settingValue = Settings.Secure.getString(
@@ -499,7 +580,8 @@ private fun isAccessibilitySettingsOn(context: Context, service: Class<out Acces
                 mStringColonSplitter.setString(settingValue)
                 while (mStringColonSplitter.hasNext()) {
                     val accessibilityService = mStringColonSplitter.next()
-                    if (accessibilityService.equals(serviceName, ignoreCase = true)) {
+                    if (accessibilityService.equals(serviceName, ignoreCase = true) || 
+                        accessibilityService.equals(serviceNameAlt, ignoreCase = true)) {
                         return true
                     }
                 }

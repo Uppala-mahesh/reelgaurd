@@ -75,6 +75,15 @@ interface ReelDao {
 
     @Query("SELECT * FROM daily_counts WHERE date >= :startDate ORDER BY date ASC")
     fun getCountsSinceFlow(startDate: String): Flow<List<DailyCountEntity>>
+
+    @Query("DELETE FROM daily_counts")
+    suspend fun clearDailyCounts()
+
+    @Query("DELETE FROM session_logs")
+    suspend fun clearSessionLogs()
+
+    @Query("DELETE FROM override_logs")
+    suspend fun clearOverrideLogs()
 }
 
 @Database(
