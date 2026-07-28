@@ -1,16 +1,21 @@
 package com.example.service
 
+import android.content.Intent
 import android.os.Bundle
 import android.widget.Toast
 import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
+import androidx.lifecycle.lifecycleScope
 import com.example.ReelGuardApplication
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import java.util.concurrent.Executor
 
+/**
+ * Transparent bridge activity that shows the biometric prompt and, on
+ * success, performs the emergency override + dismisses the cooldown
+ * overlay owned by [ReelService].
+ */
 class BiometricOverrideActivity : FragmentActivity() {
 
     private lateinit var executor: Executor
@@ -20,11 +25,8 @@ class BiometricOverrideActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Make activity transparent/empty layout
-        setContentView(android.R.layout.select_dialog_item)
-
         val packageName = intent.getStringExtra("package_name") ?: ""
-        if (packageName.isEmpty()) {
+        if (packageName.isEmpty() || !ReelGuardApplication.isInitialized()) {
             finish()
             return
         }
@@ -34,27 +36,22 @@ class BiometricOverrideActivity : FragmentActivity() {
             object : BiometricPrompt.AuthenticationCallback() {
                 override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
                     super.onAuthenticationError(errorCode, errString)
-                    Toast.makeText(applicationContext, "Authorization canceled: $errString", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(applicationContext, "Override cancelled: $errString", Toast.LENGTH_SHORT).show()
                     finish()
                 }
 
                 override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                     super.onAuthenticationSucceeded(result)
-                    Toast.makeText(applicationContext, "Bypass Authorized!", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(applicationContext, "Override authorized.", Toast.LENGTH_SHORT).show()
 
                     val repo = ReelGuardApplication.instance.repository
-                    CoroutineScope(Dispatchers.Main).launch {
-                        // Insert override log & reset counters
-                        repo.emergencyOverride(packageName, "Biometric emergency bypass activated.")
-                        
-                        // Clear service overlay
-                        ReelService.start(this@BiometricOverrideActivity) // starts it, which triggers onStartCommand to remove overlays
+                    lifecycleScope.launch {
+                        repo.emergencyOverride(packageName, "Biometric emergency override.")
 
-                        // Dismiss overlay and session
-                        val intent = android.content.Intent(this@BiometricOverrideActivity, ReelService::class.java).apply {
-                            putExtra("remove_overlay", true)
-                        }
-                        startService(intent)
+                        // Ask the running service to tear down the lock overlay.
+                        val svcIntent = Intent(this@BiometricOverrideActivity, ReelService::class.java)
+                            .putExtra("remove_overlay", true)
+                        startService(svcIntent)
 
                         finish()
                     }
@@ -62,14 +59,14 @@ class BiometricOverrideActivity : FragmentActivity() {
 
                 override fun onAuthenticationFailed() {
                     super.onAuthenticationFailed()
-                    Toast.makeText(applicationContext, "Identification failed! Cooldown remains active.", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(applicationContext, "Not recognized — cooldown stays active.", Toast.LENGTH_SHORT).show()
                 }
             })
 
         promptInfo = BiometricPrompt.PromptInfo.Builder()
-            .setTitle("ReelGuard Safety Limit Bypass")
-            .setSubtitle("Biometric confirmation required to initiate emergency scrolling override.")
-            .setNegativeButtonText("Keep Cooldown")
+            .setTitle("Unlock the feed early?")
+            .setSubtitle("Confirm your identity to override the ReelGuard cooldown.")
+            .setNegativeButtonText("Keep cooldown")
             .build()
 
         biometricPrompt.authenticate(promptInfo)

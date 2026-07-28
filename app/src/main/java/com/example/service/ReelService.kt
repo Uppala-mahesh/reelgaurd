@@ -1,38 +1,53 @@
 package com.example.service
 
-import android.annotation.SuppressLint
-import android.app.*
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.graphics.PixelFormat
-import android.provider.Settings
 import android.media.AudioManager
 import android.media.ToneGenerator
-import android.os.*
-import android.view.*
+import android.os.Build
+import android.os.IBinder
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.provider.Settings
+import android.view.Gravity
+import android.view.View
+import android.view.WindowManager
 import android.widget.FrameLayout
-import androidx.annotation.RequiresApi
-import androidx.compose.animation.*
-import androidx.compose.animation.core.*
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Block
-import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.HourglassTop
 import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material3.*
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RadialGradientShader
 import androidx.compose.ui.graphics.Shader
@@ -40,32 +55,61 @@ import androidx.compose.ui.graphics.ShaderBrush
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.app.NotificationCompat
-import androidx.lifecycle.*
-import androidx.savedstate.setViewTreeSavedStateRegistryOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.LifecycleRegistry
+import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.ViewModelStoreOwner
+import androidx.lifecycle.setViewTreeLifecycleOwner
+import androidx.lifecycle.setViewTreeViewModelStoreOwner
 import androidx.savedstate.SavedStateRegistry
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
+import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.example.MainActivity
 import com.example.ReelGuardApplication
-import com.example.data.DailyCountEntity
 import com.example.data.ReelRepository
-import kotlinx.coroutines.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
+/* Aurora palette constants (services can't reference @Composable theme). */
+private val SvcInk = Color(0xFF07070C)
+private val SvcSurface = Color(0xFF171726)
+private val SvcViolet = Color(0xFFA78BFA)
+private val SvcAqua = Color(0xFF22D3EE)
+private val SvcRose = Color(0xFFFB7185)
+private val SvcTextBright = Color(0xFFF4F4F8)
+private val SvcTextMuted = Color(0xFF9B9BB0)
+private val SvcTextFaint = Color(0xFF5C5C74)
+
+/**
+ * Foreground service that owns the two overlay windows:
+ *  • floating counter bubble (draggable, edge-snapping)
+ *  • full-screen cooldown lock overlay
+ *
+ * Fixes vs. previous revision:
+ *  • Cooldown overlay resumes remaining time after process restarts
+ *    instead of restarting the full duration.
+ *  • Biometric-override setting is respected: when disabled the
+ *    override happens directly, without launching the prompt.
+ *  • Cooldown is started via repository.startCooldown() so the
+ *    duration is consistently sourced from settings.
+ */
 class ReelService : Service(), LifecycleOwner {
 
     private lateinit var lifecycleRegistry: LifecycleRegistry
-
-    override val lifecycle: Lifecycle
-        get() = lifecycleRegistry
+    override val lifecycle: Lifecycle get() = lifecycleRegistry
 
     private val job = SupervisorJob()
     private val scope = CoroutineScope(Dispatchers.Main + job)
@@ -73,24 +117,14 @@ class ReelService : Service(), LifecycleOwner {
     private lateinit var windowManager: WindowManager
     private lateinit var repository: ReelRepository
 
-    // Window Layout references
     private var bubbleView: View? = null
     private var overlayView: View? = null
-
-    // Layout Params
     private lateinit var bubbleParams: WindowManager.LayoutParams
     private lateinit var overlayParams: WindowManager.LayoutParams
 
-    // Burn-in pixel protection offsets
-    private var burnInXOffset = 0
-    private var burnInYOffset = 0
     private var burnInJob: Job? = null
-
-    // Track state of overlays
     private var isBubbleShowing = false
     private var isOverlayShowing = false
-
-    // Sound alert generator
     private var toneGenerator: ToneGenerator? = null
 
     companion object {
@@ -112,7 +146,6 @@ class ReelService : Service(), LifecycleOwner {
     }
 
     override fun onCreate() {
-        // Simple custom lifecycle implementation to host Compose views cleanly
         lifecycleRegistry = LifecycleRegistry(this)
         lifecycleRegistry.currentState = Lifecycle.State.CREATED
 
@@ -123,60 +156,57 @@ class ReelService : Service(), LifecycleOwner {
         }
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         repository = ReelGuardApplication.instance.repository
-        toneGenerator = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 100)
+        toneGenerator = try {
+            ToneGenerator(AudioManager.STREAM_NOTIFICATION, 100)
+        } catch (_: Exception) { null }
 
         createNotificationChannel()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(
                 NOTIFICATION_ID,
-                createNotification("Service Active"),
+                createNotification("Guard active"),
                 android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
             )
         } else {
-            startForeground(NOTIFICATION_ID, createNotification("Service Active"))
+            startForeground(NOTIFICATION_ID, createNotification("Guard active"))
         }
 
         lifecycleRegistry.currentState = Lifecycle.State.RESUMED
-
-        // Initialize WindowParams
         setupWindowParams()
 
-        // 1. Observe active tracking states
+        // 1. Bubble visibility follows tracking state.
         scope.launch {
             combine(
                 repository.isTrackingActive,
                 repository.activeApp,
                 repository.isServiceEnabled
-            ) { active, app, enabled ->
-                Triple(active, app, enabled)
-            }.collect { (active, app, enabled) ->
-                if (enabled && active && app != null) {
-                    showBubble()
-                } else {
-                    hideBubble()
+            ) { active, app, enabled -> Triple(active, app, enabled) }
+                .collect { (active, app, enabled) ->
+                    if (enabled && active && app != null) showBubble() else hideBubble()
                 }
-            }
         }
 
-        // 2. Observe limit status of currently active app daily counts
+        // 2. Fire enforcement when the active app's counter breaches.
         scope.launch {
             repository.todayCounts.collect { counts ->
-                val activeAppPkg = repository.activeApp.value
-                if (activeAppPkg != null) {
-                    val activeCount = counts.find { it.appPackageName == activeAppPkg }
-                    if (activeCount != null && activeCount.exceeded) {
-                        // Check if we are already in overlay mode
-                        if (!isOverlayShowing && !isInCooldown()) {
-                            triggerLimitEnforcement()
-                        }
-                    }
+                val activePkg = repository.activeApp.value ?: return@collect
+                val entry = counts.find { it.appPackageName == activePkg } ?: return@collect
+                if (entry.exceeded && !isOverlayShowing && !repository.isInCooldown()) {
+                    triggerLimitEnforcement()
                 }
             }
         }
 
-        // 3. Keep updating the bubble position subtly to prevent burn-in
-        startBurnInExemptionWorker()
+        // 3. Resume an interrupted cooldown (process was killed mid-cooldown).
+        if (repository.isInCooldown() && !isOverlayShowing) {
+            triggerLimitEnforcement(resume = true)
+        }
+
+        // 4. Subtle pixel drift to prevent OLED burn-in.
+        startBurnInWorker()
     }
+
+    /* ─────────────── Window setup ─────────────── */
 
     private fun setupWindowParams() {
         val windowType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -202,49 +232,43 @@ class ReelService : Service(), LifecycleOwner {
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
             windowType,
-            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_FULLSCREEN or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                    WindowManager.LayoutParams.FLAG_FULLSCREEN or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
         )
     }
 
-    private fun startBurnInExemptionWorker() {
+    private fun startBurnInWorker() {
         burnInJob = scope.launch {
             while (true) {
-                delay(5 * 60000) // 5 minutes
-                // Shift by 2-3 pixels randomly
-                burnInXOffset = (-3..3).random()
-                burnInYOffset = (-3..3).random()
+                delay(5 * 60_000)
                 if (isBubbleShowing && bubbleView != null) {
-                    bubbleParams.x += burnInXOffset
-                    bubbleParams.y += burnInYOffset
+                    bubbleParams.x += (-3..3).random()
+                    bubbleParams.y += (-3..3).random()
                     updateBubbleLayout()
                 }
             }
         }
     }
 
-    private fun isInCooldown(): Boolean {
-        return System.currentTimeMillis() < repository.cooldownEndTime.value
-    }
+    private fun canOverlay(): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(this)
 
-    // Displays the floating bubble
+    /* ─────────────── Bubble ─────────────── */
+
     private fun showBubble() {
-        if (isBubbleShowing) return
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
-            return
-        }
+        if (isBubbleShowing || !canOverlay()) return
 
-        val frameLayout = HostComposeLayout(this)
+        val host = HostComposeLayout(this)
         val composeView = ComposeView(this).apply {
-            setViewTreeLifecycleOwner(frameLayout)
-            setViewTreeSavedStateRegistryOwner(frameLayout)
-            setViewTreeViewModelStoreOwner(frameLayout)
-            setContent {
-                FloatingBubbleContent()
-            }
+            setViewTreeLifecycleOwner(host)
+            setViewTreeSavedStateRegistryOwner(host)
+            setViewTreeViewModelStoreOwner(host)
+            setContent { FloatingBubbleContent() }
         }
-        frameLayout.addView(composeView)
-        bubbleView = frameLayout
+        host.addView(composeView)
+        bubbleView = host
 
         try {
             windowManager.addView(bubbleView, bubbleParams)
@@ -259,9 +283,7 @@ class ReelService : Service(), LifecycleOwner {
         bubbleView?.let { view ->
             try {
                 windowManager.removeView(view)
-                if (view is HostComposeLayout) {
-                    view.handleDestroy()
-                }
+                (view as? HostComposeLayout)?.handleDestroy()
             } catch (e: Exception) {
                 e.printStackTrace()
             }
@@ -280,35 +302,31 @@ class ReelService : Service(), LifecycleOwner {
         }
     }
 
-    // Displays full-screen limit overlay
-    private fun triggerLimitEnforcement() {
-        if (isOverlayShowing) return
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
-            return
-        }
+    /* ─────────────── Cooldown overlay ─────────────── */
+
+    private fun triggerLimitEnforcement(resume: Boolean = false) {
+        if (isOverlayShowing || !canOverlay()) return
         isOverlayShowing = true
 
-        // Play standard glass tap tone + sharp vibration
-        scope.launch(Dispatchers.Default) {
-            toneGenerator?.startTone(ToneGenerator.TONE_PROP_BEEP, 150)
-            vibrateDevice(300L)
-        }
-
-        val frameLayout = HostComposeLayout(this)
-        val composeView = ComposeView(this).apply {
-            setViewTreeLifecycleOwner(frameLayout)
-            setViewTreeSavedStateRegistryOwner(frameLayout)
-            setViewTreeViewModelStoreOwner(frameLayout)
-            setContent {
-                LimitOverlayContent()
+        if (!resume) {
+            scope.launch(Dispatchers.Default) {
+                toneGenerator?.startTone(ToneGenerator.TONE_PROP_BEEP, 150)
+                vibrateDevice(300L)
             }
         }
-        frameLayout.addView(composeView)
-        overlayView = frameLayout
+
+        val host = HostComposeLayout(this)
+        val composeView = ComposeView(this).apply {
+            setViewTreeLifecycleOwner(host)
+            setViewTreeSavedStateRegistryOwner(host)
+            setViewTreeViewModelStoreOwner(host)
+            setContent { CooldownOverlayContent(resume) }
+        }
+        host.addView(composeView)
+        overlayView = host
 
         try {
             windowManager.addView(overlayView, overlayParams)
-            // Hide bubble while full-screen warning is on
             hideBubble()
         } catch (e: Exception) {
             isOverlayShowing = false
@@ -322,9 +340,7 @@ class ReelService : Service(), LifecycleOwner {
         overlayView?.let { view ->
             try {
                 windowManager.removeView(view)
-                if (view is HostComposeLayout) {
-                    view.handleDestroy()
-                }
+                (view as? HostComposeLayout)?.handleDestroy()
             } catch (e: Exception) {
                 e.printStackTrace()
             }
@@ -334,26 +350,25 @@ class ReelService : Service(), LifecycleOwner {
 
     @Suppress("DEPRECATION")
     private fun vibrateDevice(timeMs: Long) {
-        val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
-        vibrator?.let {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                it.vibrate(VibrationEffect.createOneShot(timeMs, VibrationEffect.DEFAULT_AMPLITUDE))
-            } else {
-                it.vibrate(timeMs)
-            }
+        val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator ?: return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            vibrator.vibrate(VibrationEffect.createOneShot(timeMs, VibrationEffect.DEFAULT_AMPLITUDE))
+        } else {
+            vibrator.vibrate(timeMs)
         }
     }
 
-    // Floating Bubble Visual Layout
+    /* ─────────────── Bubble UI ─────────────── */
+
     @Composable
-    fun FloatingBubbleContent() {
+    private fun FloatingBubbleContent() {
         val sessionCount by repository.sessionCount.collectAsState()
         val activeAppPkg by repository.activeApp.collectAsState()
-        val activeAppName = repository.targetApps.find { it.packageName == activeAppPkg }?.appName ?: "App"
+        val activeAppName = repository.targetApps
+            .find { it.packageName == activeAppPkg }?.appName ?: "App"
 
         var isExpanded by remember { mutableStateOf(false) }
 
-        // Breathing scale transition
         val infiniteTransition = rememberInfiniteTransition(label = "breathing")
         val breathScale by infiniteTransition.animateFloat(
             initialValue = 1.0f,
@@ -365,26 +380,18 @@ class ReelService : Service(), LifecycleOwner {
             label = "breathing_scale"
         )
 
-        val density = LocalDensity.current
-
         Box(
             modifier = Modifier
                 .wrapContentSize()
                 .pointerInput(Unit) {
                     detectDragGestures(
-                        onDragStart = { },
                         onDragEnd = {
-                            // Snap-to-edge calculation
-                            val displayMetrics = resources.displayMetrics
-                            val screenWidth = displayMetrics.widthPixels
-                            val middle = screenWidth / 2
-
-                            // Nearest edge snapping
-                            bubbleParams.x = if (bubbleParams.x + bubbleView!!.width / 2 < middle) {
-                                12 // margin
-                            } else {
-                                screenWidth - bubbleView!!.width - 12
-                            }
+                            // Snap to nearest horizontal edge.
+                            val screenWidth = resources.displayMetrics.widthPixels
+                            val viewWidth = bubbleView?.width ?: 0
+                            bubbleParams.x =
+                                if (bubbleParams.x + viewWidth / 2 < screenWidth / 2) 12
+                                else screenWidth - viewWidth - 12
                             updateBubbleLayout()
                         },
                         onDrag = { change, dragAmount ->
@@ -396,114 +403,99 @@ class ReelService : Service(), LifecycleOwner {
                     )
                 }
         ) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.wrapContentSize()
-            ) {
-                if (!isExpanded) {
-                    // Mini Mode bubble: 56dp pure black with custom aqua glow
-                    Box(
-                        contentAlignment = Alignment.Center,
-                        modifier = Modifier
-                            .size(56.dp)
-                            .scale(breathScale)
-                            .clip(CircleShape)
-                            .background(Color(0xFF000000))
-                            .border(
-                                width = 1.5.dp,
-                                color = Color(0xFF00E5FF).copy(alpha = 0.6f),
-                                shape = CircleShape
-                            )
-                            .clickable { isExpanded = true }
+            if (!isExpanded) {
+                // Collapsed: violet-ringed obsidian orb with session count.
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .size(56.dp)
+                        .scale(breathScale)
+                        .clip(CircleShape)
+                        .background(SvcInk)
+                        .border(
+                            width = 1.5.dp,
+                            brush = Brush.linearGradient(listOf(SvcViolet, SvcAqua)),
+                            shape = CircleShape
+                        )
+                        .clickable { isExpanded = true }
+                ) {
+                    Text(
+                        text = sessionCount.toString(),
+                        color = SvcViolet,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            } else {
+                // Expanded panel.
+                Surface(
+                    modifier = Modifier
+                        .width(210.dp)
+                        .wrapContentHeight()
+                        .padding(4.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    color = SvcSurface,
+                    border = BorderStroke(1.dp, SvcViolet.copy(alpha = 0.25f)),
+                    tonalElevation = 8.dp
+                ) {
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Text(
-                            text = sessionCount.toString(),
-                            color = Color(0xFF00E5FF),
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold,
-                            textAlign = TextAlign.Center
+                            text = "ReelGuard · $activeAppName",
+                            color = SvcTextBright,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
                         )
-                    }
-                } else {
-                    // Expanded Menu Box
-                    Surface(
-                        modifier = Modifier
-                            .width(200.dp)
-                            .wrapContentHeight()
-                            .padding(4.dp),
-                        shape = RoundedCornerShape(12.dp),
-                        color = Color(0xFF121212),
-                        border = borderStrokeCyan(),
-                        tonalElevation = 8.dp
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("Session scrolls", color = SvcTextMuted, fontSize = 11.sp)
+                            Text(
+                                text = sessionCount.toString(),
+                                color = SvcViolet,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.ExtraBold
+                            )
+                        }
+                        Button(
+                            onClick = {
+                                repository.stopSession()
+                                isExpanded = false
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = SvcRose.copy(alpha = 0.14f),
+                                contentColor = SvcRose
+                            ),
+                            shape = RoundedCornerShape(10.dp),
+                            contentPadding = PaddingValues(vertical = 6.dp, horizontal = 8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Pause,
+                                contentDescription = "Pause tracking",
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Pause tracking", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { isExpanded = false },
+                            contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                text = "ReelGuard: $activeAppName",
-                                color = Color.White,
-                                fontSize = 12.sp,
+                                text = "collapse",
+                                color = SvcTextFaint,
+                                fontSize = 10.sp,
                                 fontWeight = FontWeight.SemiBold
                             )
-                            HorizontalDivider(color = Color.White.copy(alpha = 0.1f))
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = "Session Reels:",
-                                    color = Color("#A0A0A0".toColorInt()),
-                                    fontSize = 11.sp
-                                )
-                                Text(
-                                    text = sessionCount.toString(),
-                                    color = Color(0xFF00E5FF),
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                            // Pause tracking
-                            Button(
-                                onClick = {
-                                    repository.stopSession()
-                                    isExpanded = false
-                                },
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = Color(0xFFFF453A).copy(alpha = 0.15f),
-                                    contentColor = Color(0xFFFF453A)
-                                ),
-                                contentPadding = PaddingValues(vertical = 4.dp, horizontal = 8.dp),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Row(
-                                    horizontalArrangement = Arrangement.Center,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Pause,
-                                        contentDescription = "Pause",
-                                        modifier = Modifier.size(14.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text("Pause Track", fontSize = 10.sp)
-                                }
-                            }
-                            // Close Expanded overlay
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { isExpanded = false },
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = "Collapse",
-                                    color = Color("#5E5E5E".toColorInt()),
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                            }
                         }
                     }
                 }
@@ -511,52 +503,48 @@ class ReelService : Service(), LifecycleOwner {
         }
     }
 
-    // Full-screen Limit Reached Overlay Visual Layout
+    /* ─────────────── Cooldown overlay UI ─────────────── */
+
     @Composable
-    fun LimitOverlayContent() {
+    private fun CooldownOverlayContent(resume: Boolean) {
         val activeAppPkg by repository.activeApp.collectAsState()
-        val activeAppName = repository.targetApps.find { it.packageName == activeAppPkg }?.appName ?: "Active App"
+        val biometricEnabled by repository.biometricOverrideEnabled.collectAsState()
 
-        val durationMinutes by repository.cooldownDurationMinutes.collectAsState()
-        var timeLeftSeconds by remember { mutableStateOf(durationMinutes * 60) }
+        // On resume use whatever cooldown time is left; otherwise start fresh.
+        var timeLeftSeconds by remember {
+            mutableStateOf(
+                if (resume) (repository.cooldownRemainingMs() / 1000L).toInt().coerceAtLeast(1)
+                else repository.cooldownDurationMinutes.value * 60
+            )
+        }
 
-        // Cooldown timer loop
         LaunchedEffect(Unit) {
-            val cooldownEnd = System.currentTimeMillis() + (timeLeftSeconds * 1000)
-            repository.setCooldownEnd(cooldownEnd)
+            if (!resume) repository.startCooldown()
 
             while (timeLeftSeconds > 0) {
                 delay(1000L)
                 timeLeftSeconds--
             }
 
-            // Remove overlay when normal cooldown finishes
             repository.setCooldownEnd(0L)
             removeLimitEnforcementOverlay()
-            // Stop current session so it re-triggers if they scroll again later
             repository.stopSession()
         }
 
-        // Custom Radial Glow background Brush
-        val radialGlowBrush = remember {
+        val glowBrush = remember {
             object : ShaderBrush() {
                 override fun createShader(size: androidx.compose.ui.geometry.Size): Shader {
                     return RadialGradientShader(
-                        colors = listOf(
-                            Color(0xFF00E5FF).copy(alpha = 0.15f),
-                            Color(0xFF000000)
-                        ),
-                        center = androidx.compose.ui.geometry.Offset(size.width / 2f, size.height / 2f),
-                        radius = size.width * 0.7f
+                        colors = listOf(SvcViolet.copy(alpha = 0.14f), SvcInk),
+                        center = androidx.compose.ui.geometry.Offset(size.width / 2f, size.height / 2.4f),
+                        radius = size.width * 0.75f
                     )
                 }
             }
         }
 
         val formattedTime = remember(timeLeftSeconds) {
-            val min = timeLeftSeconds / 60
-            val sec = timeLeftSeconds % 60
-            String.format("%02d:%02d", min, sec)
+            String.format("%02d:%02d", timeLeftSeconds / 60, timeLeftSeconds % 60)
         }
 
         val context = LocalContext.current
@@ -564,8 +552,8 @@ class ReelService : Service(), LifecycleOwner {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black)
-                .background(radialGlowBrush),
+                .background(SvcInk)
+                .background(glowBrush),
             contentAlignment = Alignment.Center
         ) {
             Column(
@@ -576,110 +564,113 @@ class ReelService : Service(), LifecycleOwner {
                     .padding(32.dp)
             ) {
                 Icon(
-                    imageVector = Icons.Default.Block,
-                    contentDescription = "Stop icon",
-                    tint = Color(0xFFFF453A),
+                    imageVector = Icons.Default.HourglassTop,
+                    contentDescription = "Cooldown",
+                    tint = SvcViolet,
                     modifier = Modifier
-                        .size(80.dp)
-                        .padding(bottom = 16.dp)
+                        .size(72.dp)
+                        .padding(bottom = 12.dp)
                 )
 
                 Text(
-                    text = "Screen Time Spent",
-                    color = Color("#A0A0A0".toColorInt()),
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Light
-                )
-
-                Text(
-                    text = "Limit Reached — Take a Break",
-                    color = Color.White,
-                    fontSize = 24.sp,
+                    text = "LIMIT REACHED",
+                    color = SvcTextFaint,
+                    fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
+                    letterSpacing = 3.sp
+                )
+
+                Text(
+                    text = "Time to look up",
+                    color = SvcTextBright,
+                    fontSize = 28.sp,
+                    fontWeight = FontWeight.ExtraBold,
                     textAlign = TextAlign.Center,
                     modifier = Modifier.padding(vertical = 8.dp)
                 )
 
                 Text(
-                    text = "Enforced break cooldown active. Step away from your short-form algorithm for digital wellness.",
-                    color = Color("#A0A0A0".toColorInt()),
-                    fontSize = 12.sp,
+                    text = "You've spent your scroll budget for this app. The feed unlocks when the cooldown ends.",
+                    color = SvcTextMuted,
+                    fontSize = 13.sp,
                     textAlign = TextAlign.Center,
-                    lineHeight = 18.sp,
+                    lineHeight = 19.sp,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
                 )
 
-                Spacer(modifier = Modifier.height(32.dp))
+                Spacer(modifier = Modifier.height(36.dp))
 
-                // Timer Countdown
                 Text(
                     text = formattedTime,
-                    color = Color(0xFF00E5FF),
+                    color = SvcAqua,
                     fontSize = 64.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(bottom = 32.dp)
+                    fontWeight = FontWeight.ExtraBold,
+                    letterSpacing = (-1).sp,
+                    modifier = Modifier.padding(bottom = 36.dp)
                 )
 
-                Spacer(modifier = Modifier.height(16.dp))
-
-                // Emergency Override Button
                 Button(
                     onClick = {
-                        // Start biometric override activity
-                        val intent = Intent(context, BiometricOverrideActivity::class.java).apply {
-                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-                            putExtra("package_name", activeAppPkg ?: "")
+                        val pkg = activeAppPkg ?: ""
+                        if (biometricEnabled) {
+                            val intent = Intent(context, BiometricOverrideActivity::class.java).apply {
+                                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                                putExtra("package_name", pkg)
+                            }
+                            context.startActivity(intent)
+                        } else {
+                            // Biometric disabled → direct override.
+                            scope.launch {
+                                repository.emergencyOverride(pkg, "Manual override (biometric disabled).")
+                                removeLimitEnforcementOverlay()
+                            }
                         }
-                        context.startActivity(intent)
                     },
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFFFF453A)
+                        containerColor = SvcRose.copy(alpha = 0.14f),
+                        contentColor = SvcRose
                     ),
+                    border = BorderStroke(1.dp, SvcRose.copy(alpha = 0.45f)),
+                    shape = RoundedCornerShape(14.dp),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(50.dp)
+                        .height(52.dp)
                 ) {
                     Text(
                         text = "EMERGENCY OVERRIDE",
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        letterSpacing = 1.sp
                     )
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(14.dp))
 
-                // Small quit label
                 Text(
-                    text = "Biometric identification required for manual release",
-                    color = Color("#5E5E5E".toColorInt()),
+                    text = if (biometricEnabled)
+                        "Biometric confirmation required to unlock early"
+                    else
+                        "Override grants +${ReelRepository.OVERRIDE_BONUS} scrolls and is logged",
+                    color = SvcTextFaint,
                     fontSize = 10.sp
                 )
             }
         }
     }
 
-    private fun borderStrokeCyan() = BorderStroke(
-        width = 1.dp,
-        color = Color(0xFF00E5FF).copy(alpha = 0.2f)
-    )
+    /* ─────────────── Notification ─────────────── */
 
-    private fun String.toColorInt(): Int {
-        return android.graphics.Color.parseColor(this)
-    }
-
-    // Foreground Service Management helpers
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "ReelGuard Service Notifications",
+                "ReelGuard Guard Service",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Shows your daily scrolling wellbeing limit tracking alert"
+                description = "Ongoing scroll tracking status"
             }
-            val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            manager.createNotificationChannel(channel)
+            (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+                .createNotificationChannel(channel)
         }
     }
 
@@ -693,7 +684,7 @@ class ReelService : Service(), LifecycleOwner {
         )
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("ReelGuard Scrolling Counter")
+            .setContentTitle("ReelGuard")
             .setContentText(message)
             .setSmallIcon(android.R.drawable.ic_lock_idle_lock)
             .setContentIntent(pendingIntent)
@@ -703,15 +694,15 @@ class ReelService : Service(), LifecycleOwner {
             .build()
     }
 
+    /* ─────────────── Lifecycle ─────────────── */
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (!ReelGuardApplication.isInitialized()) {
             stopSelf()
             return START_NOT_STICKY
         }
-        scope.launch {
-            if (intent?.hasExtra("remove_overlay") == true) {
-                removeLimitEnforcementOverlay()
-            }
+        if (intent?.hasExtra("remove_overlay") == true) {
+            scope.launch { removeLimitEnforcementOverlay() }
         }
         return START_STICKY
     }
@@ -719,18 +710,20 @@ class ReelService : Service(), LifecycleOwner {
     override fun onDestroy() {
         hideBubble()
         removeLimitEnforcementOverlay()
-        lifecycleRegistry.currentState = Lifecycle.State.DESTROYED
+        if (::lifecycleRegistry.isInitialized) {
+            lifecycleRegistry.currentState = Lifecycle.State.DESTROYED
+        }
         job.cancel()
         toneGenerator?.release()
         super.onDestroy()
     }
 
-    override fun onBind(intent: Intent?): IBinder? {
-        return null
-    }
+    override fun onBind(intent: Intent?): IBinder? = null
 
-    // Custom Compose Frame Host View Tree classes
-    class HostComposeLayout(context: Context) : FrameLayout(context), LifecycleOwner, SavedStateRegistryOwner, ViewModelStoreOwner {
+    /** FrameLayout host that provides the tree owners Compose needs. */
+    class HostComposeLayout(context: Context) : FrameLayout(context),
+        LifecycleOwner, SavedStateRegistryOwner, ViewModelStoreOwner {
+
         private val lifecycleRegistry = LifecycleRegistry(this)
         private val savedStateRegistryController = SavedStateRegistryController.create(this)
         private val store = ViewModelStore()
@@ -745,13 +738,9 @@ class ReelService : Service(), LifecycleOwner {
             store.clear()
         }
 
-        override val lifecycle: Lifecycle
-            get() = lifecycleRegistry
-
+        override val lifecycle: Lifecycle get() = lifecycleRegistry
         override val savedStateRegistry: SavedStateRegistry
             get() = savedStateRegistryController.savedStateRegistry
-
-        override val viewModelStore: ViewModelStore
-            get() = store
+        override val viewModelStore: ViewModelStore get() = store
     }
 }
