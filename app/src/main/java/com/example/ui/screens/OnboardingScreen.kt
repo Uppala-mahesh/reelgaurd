@@ -1,13 +1,14 @@
 package com.example.ui.screens
 
-import android.accessibilityservice.AccessibilityService
 import android.content.Context
-import android.content.Intent
-import android.net.Uri
-import android.provider.Settings
-import androidx.compose.animation.*
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.BorderStroke
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -16,9 +17,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
-import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Accessibility
+import androidx.compose.material.icons.filled.BatteryChargingFull
+import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.QueryStats
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material3.*
@@ -28,48 +32,76 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.ReelRepository
 import com.example.service.ReelTrackerAccessibilityService
+import com.example.ui.components.PermissionRow
 import com.example.ui.theme.*
+import com.example.util.Permissions
 
-@OptIn(ExperimentalAnimationApi::class)
+/* ─────────────────────────────────────────────────────────────
+ *  Onboarding — Midnight Aurora redesign.
+ *  3 story slides → nickname → permission checklist.
+ * ───────────────────────────────────────────────────────────── */
+
+private data class Slide(
+    val title: String,
+    val description: String,
+    val icon: ImageVector,
+    val tagline: String,
+    val colors: List<Color>
+)
+
 @Composable
-fun OnboardingScreen(
-    onFinished: () -> Unit
-) {
+fun OnboardingScreen(onFinished: () -> Unit) {
     var currentSlide by remember { mutableStateOf(0) }
     val context = LocalContext.current
-    val sharedPrefs = remember(context) { context.getSharedPreferences("reelguard_prefs", Context.MODE_PRIVATE) }
+    val sharedPrefs = remember(context) {
+        context.getSharedPreferences(ReelRepository.PREFS_NAME, Context.MODE_PRIVATE)
+    }
 
-    val slides = listOf(
-        OnboardingSlide(
-            title = "Take Control of Your Scroll",
-            description = "Unconscious vertical swiping drains your productivity. ReelGuard detects short-form video feeds and reminds you to look up when limits are hit.",
-            illustration = { OnboardingIllustrationOne() }
-        ),
-        OnboardingSlide(
-            title = "Secure Local Accessibility Checks",
-            description = "We use Android's Accessibility framework solely to detect scrolling gestures. No data ever leaves your device — tracking is 100% private and private-by-design.",
-            illustration = { OnboardingIllustrationTwo() }
-        ),
-        OnboardingSlide(
-            title = "Enforce Your Boundaries",
-            description = "Define individual scroll allowances. When limits are exceeded, ReelGuard launches a compulsory cooldown system to help you escape the dopamine feed.",
-            illustration = { OnboardingIllustrationThree() }
+    val slides = remember {
+        listOf(
+            Slide(
+                title = "Own your scroll",
+                description = "Endless vertical feeds are engineered to keep you hooked. ReelGuard counts every swipe and reminds you to look up.",
+                icon = Icons.Default.Speed,
+                tagline = "SCROLLS, COUNTED",
+                colors = listOf(Violet, Aqua)
+            ),
+            Slide(
+                title = "Private by design",
+                description = "Scroll detection runs entirely on-device through Android's accessibility framework. Nothing ever leaves your phone.",
+                icon = Icons.Default.Security,
+                tagline = "100% ON-DEVICE",
+                colors = listOf(Mint, Aqua)
+            ),
+            Slide(
+                title = "Limits with teeth",
+                description = "Set a daily allowance per app. Cross it and ReelGuard locks the feed behind a cooldown — with a biometric-guarded escape hatch.",
+                icon = Icons.Default.Lock,
+                tagline = "ENFORCED COOLDOWNS",
+                colors = listOf(Rose, Amber)
+            )
         )
-    )
+    }
 
-    val totalSlides = 5 // 3 info slides + 1 profile slide + 1 permission slide
+    val totalSlides = 5 // 3 story + nickname + permissions
 
-    Scaffold(
-        modifier = Modifier.fillMaxSize(),
-        containerColor = PureBlack
-    ) { innerPadding ->
+    fun ensureNickname() {
+        val saved = sharedPrefs.getString("user_nickname", "") ?: ""
+        if (saved.trim().isEmpty()) {
+            sharedPrefs.edit().putString("user_nickname", "Scroller").apply()
+        }
+    }
+
+    Scaffold(modifier = Modifier.fillMaxSize(), containerColor = Ink) { innerPadding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -78,7 +110,7 @@ fun OnboardingScreen(
             verticalArrangement = Arrangement.SpaceBetween,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Header Skip button
+            /* Skip */
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.End
@@ -86,18 +118,13 @@ fun OnboardingScreen(
                 if (currentSlide < totalSlides - 1) {
                     Text(
                         text = "SKIP",
-                        color = TextGray,
+                        color = TextFaint,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
+                        letterSpacing = 2.sp,
                         modifier = Modifier
                             .clickable {
-                                // Save default nickname if skipping profile slide
-                                if (currentSlide <= 3) {
-                                    val savedName = sharedPrefs.getString("user_nickname", "") ?: ""
-                                    if (savedName.trim().isEmpty()) {
-                                        sharedPrefs.edit().putString("user_nickname", "Scroller").apply()
-                                    }
-                                }
+                                ensureNickname()
                                 onFinished()
                             }
                             .padding(8.dp)
@@ -107,7 +134,7 @@ fun OnboardingScreen(
                 }
             }
 
-            // Central Animated Slide
+            /* Slide content */
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -118,501 +145,284 @@ fun OnboardingScreen(
                     targetState = currentSlide,
                     transitionSpec = {
                         if (targetState > initialState) {
-                            slideInHorizontally(animationSpec = tween(300)) { it } + fadeIn() togetherWith
-                                    slideOutHorizontally(animationSpec = tween(300)) { -it } + fadeOut()
+                            slideInHorizontally(tween(300)) { it } + fadeIn() togetherWith
+                                    slideOutHorizontally(tween(300)) { -it } + fadeOut()
                         } else {
-                            slideInHorizontally(animationSpec = tween(300)) { -it } + fadeIn() togetherWith
-                                    slideOutHorizontally(animationSpec = tween(300)) { it } + fadeOut()
+                            slideInHorizontally(tween(300)) { -it } + fadeIn() togetherWith
+                                    slideOutHorizontally(tween(300)) { it } + fadeOut()
                         }
                     },
-                    label = "slide_transition"
+                    label = "onboarding_slide"
                 ) { index ->
-                    if (index < 3) {
-                        val slide = slides[index]
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.Center,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            // Slide drawing representation
-                            Box(
-                                modifier = Modifier
-                                    .size(180.dp)
-                                    .padding(bottom = 16.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                slide.illustration()
-                            }
-
-                            Text(
-                                text = slide.title,
-                                color = Color.White,
-                                fontSize = 24.sp,
-                                fontWeight = FontWeight.Bold,
-                                textAlign = TextAlign.Center,
-                                modifier = Modifier.padding(bottom = 12.dp)
-                            )
-
-                            Text(
-                                text = slide.description,
-                                color = TextGray,
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Light,
-                                textAlign = TextAlign.Center,
-                                lineHeight = 22.sp,
-                                modifier = Modifier.padding(horizontal = 8.dp)
-                            )
-                        }
-                    } else if (index == 3) {
-                        var nameInput by remember { mutableStateOf(sharedPrefs.getString("user_nickname", "") ?: "") }
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.Center,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(140.dp)
-                                    .border(2.dp, Brush.linearGradient(listOf(ElectricCyan, TealAccent)), CircleShape),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Person,
-                                    contentDescription = "Profile icon placeholder",
-                                    tint = ElectricCyan,
-                                    modifier = Modifier.size(64.dp)
-                                )
-                            }
-                            Spacer(modifier = Modifier.height(24.dp))
-                            Text(
-                                text = "What is your Nickname?",
-                                color = Color.White,
-                                fontSize = 24.sp,
-                                fontWeight = FontWeight.Bold,
-                                textAlign = TextAlign.Center,
-                                modifier = Modifier.padding(bottom = 8.dp)
-                            )
-                            Text(
-                                text = "Your nickname is saved locally on your device to personalize your wellbeing dashboard.",
-                                color = TextGray,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Light,
-                                textAlign = TextAlign.Center,
-                                lineHeight = 18.sp,
-                                modifier = Modifier.padding(bottom = 24.dp)
-                            )
-                            OutlinedTextField(
-                                value = nameInput,
-                                onValueChange = {
-                                    nameInput = it
-                                    sharedPrefs.edit().putString("user_nickname", it).apply()
-                                },
-                                placeholder = { Text("Enter your name/nickname", color = LabelGray) },
-                                singleLine = true,
-                                textStyle = TextStyle(color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold),
-                                colors = OutlinedTextFieldDefaults.colors(
-                                    focusedBorderColor = ElectricCyan,
-                                    unfocusedBorderColor = Color.White.copy(alpha = 0.2f),
-                                    cursorColor = ElectricCyan,
-                                    focusedContainerColor = Color(0xFF121212),
-                                    unfocusedContainerColor = Color(0xFF121212)
-                                ),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(56.dp)
-                            )
-                        }
-                    } else {
-                        var isAccessibilityGranted by remember { mutableStateOf(false) }
-                        var isOverlayGranted by remember { mutableStateOf(false) }
-                        var isUsageStatsGranted by remember { mutableStateOf(false) }
-                        var isBatteryExempted by remember { mutableStateOf(false) }
-
-                        LaunchedEffect(Unit) {
-                            while (true) {
-                                isAccessibilityGranted = isAccessibilitySettingsOn(context, ReelTrackerAccessibilityService::class.java)
-                                isOverlayGranted = Settings.canDrawOverlays(context)
-                                isUsageStatsGranted = isUsageStatsGrantedInternal(context)
-                                isBatteryExempted = isBatteryExemptedInternal(context)
-                                kotlinx.coroutines.delay(1000)
-                            }
-                        }
-
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.Center,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(100.dp)
-                                    .border(2.dp, Brush.linearGradient(listOf(ElectricCyan, SuccessGreen)), CircleShape),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Security,
-                                    contentDescription = "Shield Security icon",
-                                    tint = ElectricCyan,
-                                    modifier = Modifier.size(48.dp)
-                                )
-                            }
-                            Spacer(modifier = Modifier.height(20.dp))
-                            Text(
-                                text = "Grant System Permissions",
-                                color = Color.White,
-                                fontSize = 24.sp,
-                                fontWeight = FontWeight.Bold,
-                                textAlign = TextAlign.Center,
-                                modifier = Modifier.padding(bottom = 8.dp)
-                            )
-                            Text(
-                                text = "ReelGuard requires these permissions to detect background social app usage and display the limit overlay.",
-                                color = TextGray,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Light,
-                                textAlign = TextAlign.Center,
-                                lineHeight = 18.sp,
-                                modifier = Modifier.padding(bottom = 24.dp)
-                            )
-
-                            // Accessibility Setup Row
-                            PermissionSetupRow(
-                                title = "Accessibility Service",
-                                isGranted = isAccessibilityGranted,
-                                onClick = {
-                                    try {
-                                        context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                                    } catch (e: Exception) {
-                                        try {
-                                            context.startActivity(Intent(Settings.ACTION_SETTINGS))
-                                        } catch (ex: Exception) {}
-                                    }
-                                }
-                            )
-
-                            Spacer(modifier = Modifier.height(12.dp))
-
-                            // Overlay Setup Row
-                            PermissionSetupRow(
-                                title = "Draw Over Other Apps (Overlay)",
-                                isGranted = isOverlayGranted,
-                                onClick = {
-                                    try {
-                                        val intent = Intent(
-                                            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                            Uri.parse("package:${context.packageName}")
-                                        )
-                                        context.startActivity(intent)
-                                    } catch (e: Exception) {
-                                        try {
-                                            val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION)
-                                            context.startActivity(intent)
-                                        } catch (ex: Exception) {}
-                                    }
-                                }
-                            )
-
-                            Spacer(modifier = Modifier.height(12.dp))
-
-                            // Usage Stats Row
-                            PermissionSetupRow(
-                                title = "Usage Stats Access",
-                                isGranted = isUsageStatsGranted,
-                                onClick = {
-                                    try {
-                                        context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
-                                    } catch (e: Exception) {
-                                        try {
-                                            context.startActivity(Intent(Settings.ACTION_SETTINGS))
-                                        } catch (ex: Exception) {}
-                                    }
-                                }
-                            )
-
-                            Spacer(modifier = Modifier.height(12.dp))
-
-                            // Battery Exemption Row
-                            PermissionSetupRow(
-                                title = "Battery Optimization Bypass",
-                                isGranted = isBatteryExempted,
-                                onClick = {
-                                    try {
-                                        val intent = Intent(
-                                            Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-                                            Uri.parse("package:${context.packageName}")
-                                        )
-                                        context.startActivity(intent)
-                                    } catch (e: Exception) {
-                                        try {
-                                            val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
-                                            context.startActivity(intent)
-                                        } catch (ex: Exception) {}
-                                    }
-                                }
-                            )
-                        }
+                    when {
+                        index < 3 -> StorySlide(slides[index])
+                        index == 3 -> NicknameSlide(sharedPrefs)
+                        else -> PermissionsSlide()
                     }
                 }
             }
 
-            // Bottom Navigation Indicators & Buttons
+            /* Dots + CTA */
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(16.dp),
+                verticalArrangement = Arrangement.spacedBy(18.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                // Indicator dots
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(7.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     repeat(totalSlides) { i ->
+                        val width by animateDpAsState(
+                            targetValue = if (i == currentSlide) 22.dp else 6.dp,
+                            animationSpec = tween(250),
+                            label = "dot"
+                        )
                         Box(
                             modifier = Modifier
-                                .size(width = if (i == currentSlide) 18.dp else 6.dp, height = 6.dp)
+                                .size(width = width, height = 6.dp)
                                 .clip(CircleShape)
-                                .background(if (i == currentSlide) ElectricCyan else LabelGray)
+                                .background(
+                                    if (i == currentSlide)
+                                        Brush.horizontalGradient(listOf(Violet, Aqua))
+                                    else
+                                        Brush.horizontalGradient(listOf(Surface3, Surface3))
+                                )
                         )
                     }
                 }
 
-                // Next / Get Started controls
                 Button(
                     onClick = {
                         if (currentSlide < totalSlides - 1) {
-                            if (currentSlide == 3) {
-                                val savedName = sharedPrefs.getString("user_nickname", "") ?: ""
-                                if (savedName.trim().isEmpty()) {
-                                    sharedPrefs.edit().putString("user_nickname", "Scroller").apply()
-                                }
-                            }
+                            if (currentSlide == 3) ensureNickname()
                             currentSlide++
                         } else {
                             onFinished()
                         }
                     },
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = ElectricCyan,
-                        contentColor = PureBlack
+                        containerColor = Violet,
+                        contentColor = Ink
                     ),
-                    shape = RoundedCornerShape(12.dp),
+                    shape = RoundedCornerShape(14.dp),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(52.dp)
+                        .height(54.dp)
                 ) {
-                    Row(
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = if (currentSlide == totalSlides - 1) "GET STARTED" else "CONTINUE",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 14.sp
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-                            contentDescription = "Forward arrow",
-                            modifier = Modifier.size(16.dp)
-                        )
-                    }
+                    Text(
+                        text = if (currentSlide == totalSlides - 1) "START GUARDING" else "CONTINUE",
+                        fontWeight = FontWeight.ExtraBold,
+                        fontSize = 14.sp,
+                        letterSpacing = 1.sp
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
                 }
             }
         }
     }
 }
 
+/* ─────────────── Slides ─────────────── */
+
 @Composable
-fun PermissionSetupRow(
-    title: String,
-    isGranted: Boolean,
-    onClick: () -> Unit
-) {
-    Surface(
-        onClick = onClick,
-        shape = RoundedCornerShape(12.dp),
-        color = Color(0xFF121212),
-        border = BorderStroke(1.dp, if (isGranted) SuccessGreen.copy(alpha = 0.4f) else Color.White.copy(alpha = 0.08f)),
+private fun StorySlide(slide: Slide) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
         modifier = Modifier.fillMaxWidth()
     ) {
-        Row(
-            modifier = Modifier.padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+        Box(
+            modifier = Modifier
+                .size(150.dp)
+                .border(2.dp, Brush.linearGradient(slide.colors), CircleShape)
+                .background(slide.colors.first().copy(alpha = 0.05f), CircleShape),
+            contentAlignment = Alignment.Center
         ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(text = title, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(
+                    imageVector = slide.icon,
+                    contentDescription = null,
+                    tint = slide.colors.first(),
+                    modifier = Modifier.size(52.dp)
+                )
+                Spacer(modifier = Modifier.height(6.dp))
                 Text(
-                    text = if (isGranted) "Permission granted successfully" else "Tap here to grant permission actively",
-                    color = if (isGranted) SuccessGreen else TextGray,
-                    fontSize = 11.sp,
-                    modifier = Modifier.padding(top = 2.dp)
+                    text = slide.tagline,
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.5.sp,
+                    color = slide.colors.last()
                 )
             }
-            Box(
-                modifier = Modifier
-                    .size(10.dp)
-                    .clip(CircleShape)
-                    .background(if (isGranted) SuccessGreen else DangerRed)
-            )
         }
-    }
-}
 
-private fun isBatteryExemptedInternal(context: Context): Boolean {
-    return try {
-        val pm = context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
-        pm.isIgnoringBatteryOptimizations(context.packageName)
-    } catch (e: Exception) {
-        false
-    }
-}
+        Spacer(modifier = Modifier.height(32.dp))
 
-private fun isUsageStatsGrantedInternal(context: Context): Boolean {
-    return try {
-        val appOps = context.getSystemService(Context.APP_OPS_SERVICE) as android.app.AppOpsManager
-        val mode = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-            appOps.unsafeCheckOpNoThrow(android.app.AppOpsManager.OPSTR_GET_USAGE_STATS, android.os.Process.myUid(), context.packageName)
-        } else {
-            @Suppress("DEPRECATION")
-            appOps.checkOpNoThrow(android.app.AppOpsManager.OPSTR_GET_USAGE_STATS, android.os.Process.myUid(), context.packageName)
-        }
-        mode == android.app.AppOpsManager.MODE_ALLOWED
-    } catch (e: Exception) {
-        false
-    }
-}
-
-private fun isAccessibilitySettingsOn(context: Context, service: Class<out AccessibilityService>): Boolean {
-    try {
-        val am = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as? android.view.accessibility.AccessibilityManager
-        if (am != null) {
-            val enabledServices = am.getEnabledAccessibilityServiceList(android.accessibilityservice.AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
-            for (enabledService in enabledServices) {
-                val componentInfo = enabledService.resolveInfo?.serviceInfo
-                if (componentInfo != null && componentInfo.packageName == context.packageName && componentInfo.name == service.name) {
-                    return true
-                }
-            }
-        }
-    } catch (e: Exception) {}
-    return try {
-        var accessibilityEnabled = 0
-        val serviceName = context.packageName + "/" + service.name
-        val serviceNameAlt = context.packageName + "/" + (service.canonicalName ?: service.name)
-        try {
-            accessibilityEnabled = Settings.Secure.getInt(
-                context.applicationContext.contentResolver,
-                Settings.Secure.ACCESSIBILITY_ENABLED
-            )
-        } catch (e: Exception) {}
-        val mStringColonSplitter = android.text.TextUtils.SimpleStringSplitter(':')
-        if (accessibilityEnabled == 1) {
-            val settingValue = Settings.Secure.getString(
-                context.applicationContext.contentResolver,
-                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-            )
-            if (settingValue != null) {
-                mStringColonSplitter.setString(settingValue)
-                while (mStringColonSplitter.hasNext()) {
-                    val accessibilityService = mStringColonSplitter.next()
-                    if (accessibilityService.equals(serviceName, ignoreCase = true) || 
-                        accessibilityService.equals(serviceNameAlt, ignoreCase = true)) {
-                        return true
-                    }
-                }
-            }
-        }
-        false
-    } catch (e: Exception) {
-        false
-    }
-}
-
-data class OnboardingSlide(
-    val title: String,
-    val description: String,
-    val illustration: @Composable () -> Unit
-)
-
-// SVG custom-rendered vector models inside Onboarding Screen
-@Composable
-fun OnboardingIllustrationOne() {
-    Box(
-        modifier = Modifier
-            .size(140.dp)
-            .border(2.dp, Brush.linearGradient(listOf(ElectricCyan, TealAccent)), CircleShape),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(
-                imageVector = Icons.Default.Speed,
-                contentDescription = "Speed illustration",
-                tint = ElectricCyan,
-                modifier = Modifier.size(54.dp)
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = "SCROLL DETECTED",
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Bold,
-                color = TealAccent
-            )
-        }
+        Text(
+            text = slide.title,
+            color = TextBright,
+            fontSize = 26.sp,
+            fontWeight = FontWeight.ExtraBold,
+            textAlign = TextAlign.Center,
+            letterSpacing = (-0.5).sp
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        Text(
+            text = slide.description,
+            color = TextMuted,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Light,
+            textAlign = TextAlign.Center,
+            lineHeight = 22.sp,
+            modifier = Modifier.padding(horizontal = 8.dp)
+        )
     }
 }
 
 @Composable
-fun OnboardingIllustrationTwo() {
-    Box(
+private fun NicknameSlide(sharedPrefs: android.content.SharedPreferences) {
+    var nameInput by remember {
+        mutableStateOf(sharedPrefs.getString("user_nickname", "") ?: "")
+    }
+
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
         modifier = Modifier
-            .size(140.dp)
-            .border(2.dp, Brush.linearGradient(listOf(SuccessGreen, TealAccent)), CircleShape),
-        contentAlignment = Alignment.Center
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp)
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(
+            modifier = Modifier
+                .size(120.dp)
+                .border(2.dp, Brush.linearGradient(listOf(Violet, Aqua)), CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
             Icon(
-                imageVector = Icons.Default.Security,
-                contentDescription = "Security illustration",
-                tint = SuccessGreen,
-                modifier = Modifier.size(54.dp)
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = "100% PRIVATE DATA",
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Bold,
-                color = SuccessGreen
+                imageVector = Icons.Default.Person,
+                contentDescription = "Profile",
+                tint = Violet,
+                modifier = Modifier.size(52.dp)
             )
         }
+        Spacer(modifier = Modifier.height(28.dp))
+        Text(
+            text = "What should we call you?",
+            color = TextBright,
+            fontSize = 24.sp,
+            fontWeight = FontWeight.ExtraBold,
+            textAlign = TextAlign.Center
+        )
+        Text(
+            text = "Stored only on this device — used to personalize your dashboard.",
+            color = TextMuted,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Light,
+            textAlign = TextAlign.Center,
+            lineHeight = 18.sp,
+            modifier = Modifier.padding(top = 8.dp, bottom = 24.dp)
+        )
+        OutlinedTextField(
+            value = nameInput,
+            onValueChange = {
+                nameInput = it
+                sharedPrefs.edit().putString("user_nickname", it).apply()
+            },
+            placeholder = { Text("Your nickname", color = TextFaint) },
+            singleLine = true,
+            textStyle = TextStyle(color = TextBright, fontSize = 16.sp, fontWeight = FontWeight.SemiBold),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = Violet,
+                unfocusedBorderColor = HairLine,
+                cursorColor = Violet,
+                focusedContainerColor = Surface1,
+                unfocusedContainerColor = Surface1
+            ),
+            shape = RoundedCornerShape(14.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(58.dp)
+        )
     }
 }
 
 @Composable
-fun OnboardingIllustrationThree() {
-    Box(
+private fun PermissionsSlide() {
+    val context = LocalContext.current
+
+    var accGranted by remember { mutableStateOf(false) }
+    var ovlGranted by remember { mutableStateOf(false) }
+    var usageGranted by remember { mutableStateOf(false) }
+    var battGranted by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            accGranted = Permissions.isAccessibilityEnabled(context, ReelTrackerAccessibilityService::class.java)
+            ovlGranted = Permissions.canDrawOverlays(context)
+            usageGranted = Permissions.hasUsageStats(context)
+            battGranted = Permissions.isBatteryExempt(context)
+            kotlinx.coroutines.delay(1000)
+        }
+    }
+
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
         modifier = Modifier
-            .size(140.dp)
-            .border(2.dp, Brush.linearGradient(listOf(DangerRed, PrimaryOrange)), CircleShape),
-        contentAlignment = Alignment.Center
+            .fillMaxWidth()
+            .padding(horizontal = 4.dp)
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(
-                imageVector = Icons.Default.Lock,
-                contentDescription = "Limits lock illustration",
-                tint = DangerRed,
-                modifier = Modifier.size(54.dp)
+        Text(
+            text = "Grant system access",
+            color = TextBright,
+            fontSize = 24.sp,
+            fontWeight = FontWeight.ExtraBold,
+            textAlign = TextAlign.Center
+        )
+        Text(
+            text = "These four switches let ReelGuard watch for scrolls and enforce your limits.",
+            color = TextMuted,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Light,
+            textAlign = TextAlign.Center,
+            lineHeight = 18.sp,
+            modifier = Modifier.padding(top = 8.dp, bottom = 24.dp)
+        )
+
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            PermissionRow(
+                title = "Accessibility service",
+                description = "Detects feed scrolls locally.",
+                granted = accGranted,
+                icon = Icons.Default.Accessibility,
+                onClick = { Permissions.openAccessibilitySettings(context) }
             )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = "LIMIT OVERRIDE",
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Bold,
-                color = DangerRed
+            PermissionRow(
+                title = "Display over other apps",
+                description = "Shows counter bubble & lock overlay.",
+                granted = ovlGranted,
+                icon = Icons.Default.Layers,
+                onClick = { Permissions.openOverlaySettings(context) }
+            )
+            PermissionRow(
+                title = "Usage access",
+                description = "Verifies focus sessions.",
+                granted = usageGranted,
+                icon = Icons.Default.QueryStats,
+                onClick = { Permissions.openUsageStatsSettings(context) }
+            )
+            PermissionRow(
+                title = "Unrestricted battery",
+                description = "Keeps the guard alive in background.",
+                granted = battGranted,
+                icon = Icons.Default.BatteryChargingFull,
+                onClick = { Permissions.openBatterySettings(context) }
             )
         }
     }

@@ -5,17 +5,27 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.BarChart
-import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Insights
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.ReelRepository
 import com.example.ui.screens.DashboardScreen
 import com.example.ui.screens.OnboardingScreen
 import com.example.ui.screens.SettingsScreen
@@ -27,7 +37,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
 
         val repository = (application as ReelGuardApplication).repository
-        val sharedPrefs = getSharedPreferences("reelguard_prefs", Context.MODE_PRIVATE)
+        val sharedPrefs = getSharedPreferences(ReelRepository.PREFS_NAME, Context.MODE_PRIVATE)
 
         setContent {
             MyApplicationTheme {
@@ -43,84 +53,91 @@ class MainActivity : ComponentActivity() {
                         }
                     )
                 } else {
-                    MainNavigationScaffold(repository)
+                    AuroraScaffold(repository)
                 }
             }
         }
     }
 }
 
-@Composable
-fun MainNavigationScaffold(repository: com.example.data.ReelRepository) {
-    var selectedIndex by remember { mutableStateOf(0) }
+private enum class Tab(val label: String, val icon: ImageVector) {
+    INSIGHTS("Insights", Icons.Default.Insights),
+    CONTROLS("Controls", Icons.Default.Tune)
+}
 
-    Scaffold(
+/**
+ * Main scaffold with a floating pill navigation bar instead of the
+ * default full-width Material NavigationBar.
+ */
+@Composable
+private fun AuroraScaffold(repository: ReelRepository) {
+    var selected by remember { mutableStateOf(Tab.INSIGHTS) }
+
+    Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(PureBlack),
-        containerColor = PureBlack,
-        bottomBar = {
-            NavigationBar(
-                containerColor = PureBlack,
-                tonalElevation = 0.dp,
-                modifier = Modifier
-                    .background(PureBlack)
-                    .windowInsetsPadding(WindowInsets.navigationBars)
-                    .height(64.dp)
-            ) {
-                // Dashboard Tab
-                NavigationBarItem(
-                    selected = selectedIndex == 0,
-                    onClick = { selectedIndex = 0 },
-                    icon = {
-                        Icon(
-                            imageVector = Icons.Default.BarChart,
-                            contentDescription = "Analytics Menu Dashboard Option",
-                            modifier = Modifier.size(24.dp)
-                        )
-                    },
-                    label = { Text("Analytics", fontSize = 10.sp) },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = ElectricCyan,
-                        selectedTextColor = ElectricCyan,
-                        unselectedIconColor = TextGray,
-                        unselectedTextColor = TextGray,
-                        indicatorColor = Color.Transparent
-                    )
-                )
-
-                // Settings Tab
-                NavigationBarItem(
-                    selected = selectedIndex == 1,
-                    onClick = { selectedIndex = 1 },
-                    icon = {
-                        Icon(
-                            imageVector = Icons.Default.Settings,
-                            contentDescription = "Limits Setup Config Settings Option",
-                            modifier = Modifier.size(24.dp)
-                        )
-                    },
-                    label = { Text("Settings", fontSize = 10.sp) },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = ElectricCyan,
-                        selectedTextColor = ElectricCyan,
-                        unselectedIconColor = TextGray,
-                        unselectedTextColor = TextGray,
-                        indicatorColor = Color.Transparent
-                    )
-                )
+            .background(Ink)
+    ) {
+        // Screen content
+        Box(modifier = Modifier.fillMaxSize()) {
+            when (selected) {
+                Tab.INSIGHTS -> DashboardScreen(repository)
+                Tab.CONTROLS -> SettingsScreen(repository)
             }
         }
-    ) { innerPadding ->
-        Box(
+
+        // Floating pill navigation
+        Row(
             modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .background(PureBlack)
+                .align(Alignment.BottomCenter)
+                .windowInsetsPadding(WindowInsets.navigationBars)
+                .padding(bottom = 14.dp)
+                .clip(RoundedCornerShape(50))
+                .background(Surface2.copy(alpha = 0.94f))
+                .border(1.dp, HairLine, RoundedCornerShape(50))
+                .padding(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            when (selectedIndex) {
-                0 -> DashboardScreen(repository)
-                1 -> SettingsScreen(repository)
+            Tab.values().forEach { tab ->
+                val isSelected = selected == tab
+                val bg by animateColorAsState(
+                    targetValue = if (isSelected) Violet.copy(alpha = 0.16f) else androidx.compose.ui.graphics.Color.Transparent,
+                    animationSpec = tween(250),
+                    label = "tab_bg"
+                )
+                val tint by animateColorAsState(
+                    targetValue = if (isSelected) Violet else TextFaint,
+                    animationSpec = tween(250),
+                    label = "tab_tint"
+                )
+
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(bg)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) { selected = tab }
+                        .padding(horizontal = 18.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = tab.icon,
+                        contentDescription = tab.label,
+                        tint = tint,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    if (isSelected) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = tab.label,
+                            color = tint,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
             }
         }
     }

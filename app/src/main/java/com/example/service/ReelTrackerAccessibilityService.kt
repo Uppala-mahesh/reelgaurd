@@ -1,5 +1,6 @@
 package com.example.service
 
+import android.accessibilityservice.AccessibilityService
 import android.view.accessibility.AccessibilityEvent
 import com.example.ReelGuardApplication
 import com.example.data.ReelRepository
@@ -8,7 +9,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
-class ReelTrackerAccessibilityService : android.accessibilityservice.AccessibilityService() {
+/**
+ * Watches for scroll events inside short-form video apps and feeds
+ * them into [ReelRepository]. Enforcement (kick to home) fires when
+ * a limit is crossed or when the user re-enters a locked app during
+ * an active cooldown.
+ */
+class ReelTrackerAccessibilityService : AccessibilityService() {
 
     private val job = SupervisorJob()
     private val scope = CoroutineScope(Dispatchers.Main + job)
@@ -28,7 +35,7 @@ class ReelTrackerAccessibilityService : android.accessibilityservice.Accessibili
         isRunning = true
     }
 
-    private fun getRepositorySafe(): ReelRepository? {
+    private fun repositoryOrNull(): ReelRepository? {
         if (cachedRepository == null && ReelGuardApplication.isInitialized()) {
             cachedRepository = ReelGuardApplication.instance.repository
         }
@@ -37,32 +44,23 @@ class ReelTrackerAccessibilityService : android.accessibilityservice.Accessibili
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
-        val repository = getRepositorySafe() ?: return
+        val repository = repositoryOrNull() ?: return
         val packageName = event.packageName?.toString() ?: return
-
         val isTargetApp = targetPackages.contains(packageName)
 
         when (event.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
                 if (isTargetApp) {
-                    // User opened a tracked short-form layout
                     repository.startSession(packageName)
-                    // Start Foreground Service to ensure background capabilities
                     ReelService.start(this)
-                    
-                    // Direct home check if they open the app and it is already exceeded with active cooldown
+
+                    // Re-entering a locked app during cooldown → back to home.
                     scope.launch {
-                        val today = repository.getTodayDateString()
-                        val counts = ReelGuardApplication.instance.database.reelDao().getDailyCounts(today)
-                        val appCount = counts.find { it.appPackageName == packageName }
-                        if (appCount != null && appCount.exceeded) {
-                            if (System.currentTimeMillis() < repository.cooldownEndTime.value) {
-                                performGlobalAction(GLOBAL_ACTION_HOME)
-                            }
+                        if (repository.isInCooldown() && repository.isAppExceededToday(packageName)) {
+                            performGlobalAction(GLOBAL_ACTION_HOME)
                         }
                     }
                 } else {
-                    // User returned home or navigated away
                     repository.stopSession()
                 }
             }
@@ -70,41 +68,27 @@ class ReelTrackerAccessibilityService : android.accessibilityservice.Accessibili
             AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
                 if (!isTargetApp) return
 
-                // Auto-activate tracking session if we detect scroll inside target package
+                // Auto-start session if scroll detected without a window event.
                 if (!repository.isTrackingActive.value) {
                     repository.startSession(packageName)
                     ReelService.start(this)
                 }
 
-                if (packageName == "com.google.android.youtube") {
-                    android.util.Log.d("ReelGuardTracker", "SCROLL DETECTED: YouTube Short")
-                } else if (packageName == "com.instagram.android") {
-                    android.util.Log.d("ReelGuardTracker", "SCROLL DETECTED: Instagram Reel")
-                } else {
-                    android.util.Log.d("ReelGuardTracker", "SCROLL DETECTED: $packageName")
-                }
+                val now = System.currentTimeMillis()
+                // 800ms debounce filters layout-jitter double counts.
+                if (now - lastScrollTime < SCROLL_DEBOUNCE_MS) return
+                lastScrollTime = now
 
-                if (repository.isTrackingActive.value) {
-                    val currentTime = System.currentTimeMillis()
-                    // 800ms Debounce mechanism to catch fast consecutive scrolls while filtering redraw layout jitter
-                    if (currentTime - lastScrollTime >= 800) {
-                        lastScrollTime = currentTime
-                        scope.launch {
-                            val limitReached = repository.registerScroll(packageName)
-                            if (limitReached) {
-                                // Kick to home screen immediately when limit is reached
-                                performGlobalAction(GLOBAL_ACTION_HOME)
-                            } else {
-                                // If they attempt to continue scrolling after limit is reached
-                                val today = repository.getTodayDateString()
-                                val counts = ReelGuardApplication.instance.database.reelDao().getDailyCounts(today)
-                                val appCount = counts.find { it.appPackageName == packageName }
-                                if (appCount != null && appCount.exceeded) {
-                                    if (System.currentTimeMillis() < repository.cooldownEndTime.value) {
-                                        performGlobalAction(GLOBAL_ACTION_HOME)
-                                    }
-                                }
-                            }
+                scope.launch {
+                    val crossedLimit = repository.registerScroll(packageName)
+                    when {
+                        crossedLimit -> {
+                            // Limit crossed on this scroll → enforce immediately.
+                            performGlobalAction(GLOBAL_ACTION_HOME)
+                        }
+                        repository.isInCooldown() && repository.isAppExceededToday(packageName) -> {
+                            // Attempting to scroll a locked app mid-cooldown.
+                            performGlobalAction(GLOBAL_ACTION_HOME)
                         }
                     }
                 }
@@ -113,11 +97,7 @@ class ReelTrackerAccessibilityService : android.accessibilityservice.Accessibili
     }
 
     override fun onInterrupt() {
-        // Stop session if service is forcibly killed/disabled
-        val repository = getRepositorySafe()
-        if (repository != null) {
-            repository.stopSession()
-        }
+        repositoryOrNull()?.stopSession()
     }
 
     override fun onServiceConnected() {
@@ -132,6 +112,8 @@ class ReelTrackerAccessibilityService : android.accessibilityservice.Accessibili
     }
 
     companion object {
+        private const val SCROLL_DEBOUNCE_MS = 800L
+
         @Volatile
         var isRunning = false
     }
